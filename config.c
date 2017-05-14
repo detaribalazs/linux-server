@@ -4,7 +4,7 @@ int configure_server(config_parameter_t* dest)
 {
 	int config_fd;
 	char buf[CONFIG_PARAMETER_NUM*50];
-	char default_cfg[49] = "IP_ADDR=127.0.0.1\nPORT_ADDR=8081\nMAX_CONN_NUM=5\n\0";
+	char default_cfg[49] = DEFAULT_CONFIG_STRING;
 	int length;
 	char ch = 0;
 	int i = 0, j = 0, k = 0, pos = 0;
