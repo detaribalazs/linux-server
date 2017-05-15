@@ -1,10 +1,10 @@
 # Makefile
 
 release_flags := -Wall -c -O3 -g0
-debug_flags := -Wall -c -ggdb2
-objs := server.o config.o
+debug_flags := -Wall -c -ggdb2 -DDEBUG
+objs := main.o config.o
 debug_objs := server_debug.o config_debug.o
-prgs := main_debug main
+prgs := server_debug server
 
 all: $(prgs)
 
@@ -13,11 +13,11 @@ all: $(prgs)
 clean: 
 	rm ./*.o $(prgs)
 
-server.o: server.c config.h
-	gcc $(release_flags) -L./config.h server.c
+main.o: main.c config.h
+	gcc $(release_flags) -L./config.h main.c
 
-server_debug.o: server.c config.h
-	gcc $(debug_flags) -o server_debug.o -L./config.h server.c
+server_debug.o: main.c config.h
+	gcc $(debug_flags) -o server_debug.o -L./config.h main.c
 
 config.o: config.c config.h
 	gcc $(release_flags) -L./config.h config.c
@@ -25,8 +25,8 @@ config.o: config.c config.h
 config_debug.o: config.c config.h
 	gcc $(debug_flags) -o config_debug.o -L./config.h config.c
 
-main: $(objs)
-	gcc $(objs) -o main
+server: $(objs)
+	gcc $(objs) -o server
 
-main_debug: $(debug_objs)
-	gcc $(debug_objs) -o main_debug
+server_debug: $(debug_objs)
+	gcc $(debug_objs) -o server_debug

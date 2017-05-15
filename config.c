@@ -4,12 +4,12 @@ int configure_server(config_parameter_t* dest)
 {
 	int config_fd;
 	char buf[CONFIG_PARAMETER_NUM*50];
-	char default_cfg[49] = DEFAULT_CONFIG_STRING;
+	char default_cfg[] = DEFAULT_CONFIG_STRING;
 	int length;
 	char ch = 0;
 	int i = 0, j = 0, k = 0, pos = 0;
 	char* cfg_data[CONFIG_PARAMETER_NUM];
-	char cfg_param_list[CONFIG_PARAMETER_NUM][CONFIG_PARAMETER_MAX_LENGTH] = {"IP_ADDR", "PORT_ADDR", "MAX_CONN_NUM"};
+	char cfg_param_list[CONFIG_PARAMETER_NUM][CONFIG_PARAMETER_MAX_LENGTH] = CONFIG_PARAMETER_LIST;
 	char tmp[CONFIG_PARAMETER_MAX_LENGTH];
 	char cfg_param_value[CONFIG_PARAMETER_NUM][CONFIG_PARAMETER_MAX_LENGTH];
 	int value_flag = 0;
@@ -22,14 +22,13 @@ int configure_server(config_parameter_t* dest)
 		config_fd = creat("./config.cfg", 0644);
 		if(config_fd < 0)
 		{
-			printf("Couldn't create config.cfg");
+			perror("Couldn't create config.cfg");
 			return 1;
 		}	
 
 		if(write(config_fd, default_cfg, strlen(default_cfg)) != strlen(default_cfg))
 		{
 			perror("Couldn't write default config parameters.");
-			printf("%d\n", errno);
 			return 1;
 		}
 		else
@@ -38,7 +37,7 @@ int configure_server(config_parameter_t* dest)
 			config_fd = open("./config.cfg", O_RDONLY);
 			if(config_fd < 0)
 			{
-				printf("Couldn't create config.cfg");
+				perror("Couldn't create config.cfg");
 				return 1;
 			}	
 		}
@@ -51,9 +50,6 @@ int configure_server(config_parameter_t* dest)
 		perror("config_read");
 		return 1;
 	}
-	#ifdef DEBUG
-	printf("%s\n", buf);
-	#endif
 
 	/* get separete lines from config file */
 	buf[length] = '\0';
@@ -118,7 +114,23 @@ int configure_server(config_parameter_t* dest)
 					/* find out is paramter numeric or string */
 					if(strstr(cfg_param_list[i], "NUM"))
 					{
-						dest->max_conn = strtoimax(tmp, NULL, 10);
+						switch(i){
+							case 0:
+								dest->localhost = strtoimax(tmp, NULL, 10);
+								break;
+							case 2: 
+								dest->max_conn = strtoimax(tmp, NULL, 10);
+							break;
+							case 3:
+								dest->ss_php = strtoimax(tmp, NULL, 10);
+							break;
+							case 4:
+								dest->log = strtoimax(tmp, NULL, 10);
+							break;
+							default:
+								perror("Config switch");
+							break;
+						};
 					}
 					else
 					{
@@ -139,12 +151,6 @@ int configure_server(config_parameter_t* dest)
 	}
 	/* close opened files */
 	close(config_fd);
-	strcpy((char*)dest->ip_address, (char*)(&cfg_param_value[0]));
 	strcpy((char*)dest->port, (char*)(&cfg_param_value[1]));
-	#ifdef DEBUG
-	printf("%s\n", dest->ip_address);
-	printf("%s\n", dest->port);
-	printf("%d\n", dest->max_conn);
-	#endif 
 	return 0;
 }
