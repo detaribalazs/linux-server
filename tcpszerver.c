@@ -69,7 +69,9 @@ int main()
   int status;
   key_t msgq_key;
   int msgq_id;
+  int incoming_ssock_req;
   struct pollfd pollset;
+  char err_msg[] = "Server unavailable.\n";
 
   /**************************** logfile init ****************************/
   log_fd = open("./logfile.log", O_APPEND|O_CREAT|O_WRONLY, 0644);
@@ -133,6 +135,10 @@ int main()
   /* socket reusable  */
   reuse = 1;
   setsockopt(ssock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+  /* register ssock in pollset */
+  pollset.fd = ssock;
+  pollset.events = POLLIN;
   
   /* bind socket to */
   if(bind(ssock, res->ai_addr, res->ai_addrlen) < 0)
@@ -167,72 +173,84 @@ int main()
 
   while(1)
   {
-  	if(active_connection < MAX_CONNECTION_NUM)
-  	{
-
-      /* accept incoming connection */
-	  	if((csock = accept(ssock, (struct sockaddr*)&addr, &addrlen)) >= 0)
-	  	{
-	  		active_connection++;
-	  		/* próbáljuk meg kideríteni a kapcsolódó nevét */
-	  	  	if(getnameinfo((struct sockaddr*)&addr, addrlen, 
-	  	    	ips, sizeof(ips), servs, sizeof(servs), 0) == 0)
-	  	  	{
-	  	  		t = time(NULL);
-  				  tm = *localtime(&t);
-	  	  		dprintf(log_fd, "Client connected: %s:%s\tat %d-%d-%d %d:%d:%d\n",ips, servs,
-	  	  		 				tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, 
-	  	  		 				tm.tm_min, tm.tm_sec);
-	  	  		#ifdef DEBUG
-	  	    	printf("Connected: %s:%s\n", ips, servs);
-	  	    	#endif
-	  	  	}
-	  	  	else
-	  	  	{
-	  	  		t = time(NULL);
-  				  tm = *localtime(&t);
-	  	  		dprintf(log_fd, "Client connected: unknown client\tat %d-%d-%d %d:%d:%d\n",
-	  	  		 	  		 	tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, 
-	  	  		 				tm.tm_min, tm.tm_sec);
-	  	  		#ifdef DEBUG
-	  	    	printf("Connected: unknown client\n");
-	  	    	#endif
-	  	  	}
-
-
-	  	  	pid = fork();
-	  	  	if(pid < 0)
-	  	  	{
-	  	  		fprintf(stderr, "fork() error.\n");
+    incoming_ssock_req = poll(&pollset, 1, 0);
+    if(incoming_ssock_req < 0)
+    {
+        fprintf(stderr, "Poll error.\n");
+        resource_liberator();
+        return 1; 
+    }
+    /* incoming request on ssock */
+    if((incoming_ssock_req == 1) && (pollset.revents & (POLLIN)))
+    {
+    	if(active_connection < MAX_CONNECTION_NUM)
+    	{
+        /* accept incoming connection */
+  	  	if((csock = accept(ssock, (struct sockaddr*)&addr, &addrlen)) >= 0)
+  	  	{
+  	  		active_connection++;
+  	  		/* get client data */
+  	  	  if(getnameinfo((struct sockaddr*)&addr, addrlen, 
+  	  	  	ips, sizeof(ips), servs, sizeof(servs), 0) == 0)
+  	  	  {
+  	  	  	t = time(NULL);
+    			  tm = *localtime(&t);
+  	  	  	dprintf(log_fd, "Client connected: %s:%s\tat %d-%d-%d %d:%d:%d\n",ips, servs,
+  	  	  	 				tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, 
+  	  	  	 				tm.tm_min, tm.tm_sec);
+  	  	  	#ifdef DEBUG
+  	  	  	printf("Connected: %s:%s\n", ips, servs);
+  	  	  	#endif
+  	  	  }
+  	  	  else
+  	  	  {
+  	  	  	t = time(NULL);
+    			  tm = *localtime(&t);
+  	  	  	dprintf(log_fd, "Client connected: unknown client\tat %d-%d-%d %d:%d:%d\n",
+  	  	  	 	  		 	tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, 
+  	  	  	 				tm.tm_min, tm.tm_sec);
+  	  	  	#ifdef DEBUG
+  	  	  	printf("Connected: unknown client\n");
+  	  	  	#endif
+  	  	  }
+  	  	  pid = fork();
+  	  	  if(pid < 0)
+  	  	  {
+  	  	  	fprintf(stderr, "fork() error.\n");
             dprintf(log_fd, "fork() error.\n");
-	  	  		return 1;
-	  	  	}
-	  	  	/* child process */
-	  	  	if(pid == 0)
-	  	  	{		
-	  	  		sprintf(arg_buf, "%d", csock);
-	  	  		execl("tcp_proc", "tcp_proc", "./tcp_proc.c", arg_buf, NULL);
-	  	  	}
-	  	}
-	}
-	else
-	{
+  	  	  	return 1;
+  	  	  }
+  	  	  /* child process */
+  	  	  if(pid == 0)
+  	  	  {		
+  	  	  	sprintf(arg_buf, "%d", csock);
+  	  	  	execl("tcp_proc", "tcp_proc", "./tcp_proc.c", arg_buf, NULL);
+  	  	  }
+  	  	}
+  	  }
+      else
+  	  {
+    		dprintf(log_fd, "Maximal process number reached at %d-%d-%d %d:%d:%d\n\n", tm.tm_year + 1900, 
+    	  	  					tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+    		printf("Maximal process number reached\n");
+        if((csock = accept(ssock, (struct sockaddr*)&addr, &addrlen)) >= 0)
+        {
+          /* TODO send discard message */
+          write(csock, err_msg, sizeof(err_msg));
+          close(csock);
+        }
+  	  }
+    }
 
-		dprintf(log_fd, "Maximal process number reached at %d-%d-%d %d:%d:%d\n\n", tm.tm_year + 1900, 
-	  	  					tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
-		printf("Nincs szabad process\n");
-		/* wait for any child */
-		if( waitpid(0, &status, WNOHANG) == 0)
-		{
-			waitpid(0, &status, 0);
-			active_connection--;
-		}
-		else
-		{
-			active_connection--;
-		}
-	}
-  }
+
+
+
+    /* wait for any child */
+    if( waitpid(0, &status, WNOHANG) > 0)
+    {
+      active_connection--;
+    }
+}
 
   dprintf(log_fd, "Session ended successfully\n");
   resource_liberator();
