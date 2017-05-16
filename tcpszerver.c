@@ -16,12 +16,42 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
 #include <time.h>
+#include <errno.h>
 
 #define PORT "1122"
 #define BUFFSIZE 1024
 #define MAX_CONNECTION_NUM	2
 #define DEBUG
+
+int log_fd;
+int ssock;
+time_t t;
+struct tm tm;
+
+/* message format */
+struct conn_info{
+  int pid;          /* which working process */
+  int csock;        /* which client socket */
+  int status;       /* status of connection */
+};
+
+void resource_liberator(void)
+{
+  t = time(NULL);
+  tm = *localtime(&t);
+  #ifdef DEBUG
+  printf("Session over at %d-%d-%d %d:%d:%d\n\n", tm.tm_year + 1900, 
+        tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+  #endif
+  dprintf(log_fd, "Session over at %d-%d-%d %d:%d:%d\n\n", tm.tm_year + 1900, 
+        tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+  close(log_fd);
+  close(ssock);
+}
+
 int main() 
 {
   struct addrinfo hints;
@@ -31,33 +61,46 @@ int main()
   socklen_t addrlen;
   char ips[NI_MAXHOST];
   char servs[NI_MAXSERV];
-  int ssock, csock;
+  int csock;
   int reuse;
   char arg_buf[16];
   int pid;
   int active_connection = 0;
   int status;
-  int log_fd;
-  time_t t;
-  struct tm tm;
+  key_t msgq_key;
+  int msgq_id;
+  struct pollfd pollset;
 
+  /**************************** logfile init ****************************/
   log_fd = open("./logfile.log", O_APPEND|O_CREAT|O_WRONLY, 0644);
   if(log_fd < 0)
   {
-  	perror("Log file open");
-  	return 1;
+    perror("Log file open");
+    return 1;
   }
 
   t = time(NULL);
   tm = *localtime(&t);
   #ifdef DEBUG
-  printf("Server started: Date: %d-%d-%d %d:%d:%d\n\n", tm.tm_year + 1900, 
-	  	  tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+  printf("Session started at %d-%d-%d %d:%d:%d\n\n", tm.tm_year + 1900, 
+        tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
   #endif
-  dprintf(log_fd, "Server started: Date: %d-%d-%d %d:%d:%d\n\n", tm.tm_year + 1900, 
-	  	  tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+  dprintf(log_fd, "Session started at %d-%d-%d %d:%d:%d\n\n", tm.tm_year + 1900, 
+        tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 
-  /*********************************************socket init *************************************/  
+  /***********************************************************************/
+
+  /***************************** init msg queue **************************/
+  //msgq_key = key(".", 's');
+  //msgq_id = msgget(msgq_key, IPC_CREAT|IPC_EXEC, 0664);
+  //if(msgq_id == -1)
+  //{
+  //  fprintf(stderr, "Message queue intialization error\n");
+  //}
+
+  /***********************************************************************/
+
+  /*****************************socket init ******************************/  
   memset(&hints, 0, sizeof(hints));
   hints.ai_flags = AI_PASSIVE;
   hints.ai_family = AF_INET6;
@@ -66,11 +109,14 @@ int main()
   err = getaddrinfo(NULL, PORT, &hints, &res);
   if(err != 0)
   {
-    fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(err));
+    fprintf(stderr, "Getaddrinfo error: %s\n", gai_strerror(err));
+    dprintf(log_fd, "Getaddrinfo error: %s\n", gai_strerror(err));
+    resource_liberator();
     return -1;
   }
   if(res == NULL)
   {
+    resource_liberator();
     return -1;
   }
   
@@ -78,18 +124,21 @@ int main()
   ssock = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
   if(ssock < 0)
   {
-    perror("socket"); 
+    fprintf(stderr, "Server socket init error\n");
+    dprintf(log_fd, "Server socket init error\n");
+    resource_liberator(); 
     return 1;
   }
   
-  /* Engedélyezzük a REUSE-t (SO_REUSEADDR). Socket level (SOL_SOCKET),  */
+  /* socket reusable  */
   reuse = 1;
   setsockopt(ssock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
   
-  /* Címhez kötjük a server socketet getaddrinfo() válasza alapján */
+  /* bind socket to */
   if(bind(ssock, res->ai_addr, res->ai_addrlen) < 0)
   {
-    perror("bind");    
+    fprintf(stderr, "Server socket bind error.\n");    
+    resource_liberator();
     return 1;
   }
 
@@ -98,21 +147,30 @@ int main()
   /* Bekapcsoljuk a kapcsolodasra valo varakozast. */
   if(listen(ssock, MAX_CONNECTION_NUM) < 0)
   {
-    perror("listen");
+    fprintf(stderr, "Listen error.\n");
+    dprintf(log_fd, "Listen error.\n");
     return 1;
   }
 
-  /* Felszabadítjuk a getadrrinfo() által generált láncolt listát. A továbbiakban nem lesz rá szükségünk */
+  /* free a getadrrinfo() */
   freeaddrinfo(res);
 
-  /* Cím hosszának beállítása sizeof()-fal */
+  /* address length */
   addrlen = sizeof(addr);
 
-  /* Fogadjuk a kapcsolodasokat. */
+  //err = chroot(".");
+  //if(err == -1)
+  //{
+  //  fprintf(stderr, "Error: chroot(), %d", errno);
+  //
+  //}
+
   while(1)
   {
   	if(active_connection < MAX_CONNECTION_NUM)
   	{
+
+      /* accept incoming connection */
 	  	if((csock = accept(ssock, (struct sockaddr*)&addr, &addrlen)) >= 0)
 	  	{
 	  		active_connection++;
@@ -121,7 +179,7 @@ int main()
 	  	    	ips, sizeof(ips), servs, sizeof(servs), 0) == 0)
 	  	  	{
 	  	  		t = time(NULL);
-  				tm = *localtime(&t);
+  				  tm = *localtime(&t);
 	  	  		dprintf(log_fd, "Client connected: %s:%s\tat %d-%d-%d %d:%d:%d\n",ips, servs,
 	  	  		 				tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, 
 	  	  		 				tm.tm_min, tm.tm_sec);
@@ -132,7 +190,7 @@ int main()
 	  	  	else
 	  	  	{
 	  	  		t = time(NULL);
-  				tm = *localtime(&t);
+  				  tm = *localtime(&t);
 	  	  		dprintf(log_fd, "Client connected: unknown client\tat %d-%d-%d %d:%d:%d\n",
 	  	  		 	  		 	tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, 
 	  	  		 				tm.tm_min, tm.tm_sec);
@@ -145,14 +203,14 @@ int main()
 	  	  	pid = fork();
 	  	  	if(pid < 0)
 	  	  	{
-	  	  		perror("fork() error\n");
-	  	  		exit(-1);
+	  	  		fprintf(stderr, "fork() error.\n");
+            dprintf(log_fd, "fork() error.\n");
+	  	  		return 1;
 	  	  	}
 	  	  	/* child process */
 	  	  	if(pid == 0)
 	  	  	{		
 	  	  		sprintf(arg_buf, "%d", csock);
-	  	  		//args = {"tcp_proc", "./tcp_proc.c", arg_buf, NULL};
 	  	  		execl("tcp_proc", "tcp_proc", "./tcp_proc.c", arg_buf, NULL);
 	  	  	}
 	  	}
@@ -176,10 +234,8 @@ int main()
 	}
   }
 
-  /* lezárjuk a szerver socketet */
-  close(log_fd);
-  close(ssock);
-
+  dprintf(log_fd, "Session ended successfully\n");
+  resource_liberator();
   return 0;
 }
 
