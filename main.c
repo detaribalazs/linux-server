@@ -93,7 +93,7 @@ int main(int argc, char** argv)
 	/* localhost is set */
 	if(server_parameters.localhost)
 	{
-		address.sa_family_t = AF_INET6;
+		address.sin6_family = AF_INET6;
 	}
 	/* we need address info */
 	else
