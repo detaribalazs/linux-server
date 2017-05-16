@@ -38,7 +38,7 @@ int main(int argc, char **argv)
    	   	printf("HIBA A SOCKET-TEL\n");
    	    	/* lezárjuk a szerver socketet */
    	     	close(csock);
-   	     	return 1;
+   	     	return -1;
    	 	}
    	 	/* adat jött a socketen */
    	 	if(pollset[0].revents & (POLLIN))
@@ -50,14 +50,14 @@ int main(int argc, char **argv)
    	    		printf("Socket olvasási hiba\n");
    	     		/* lezárjuk a szerver socketet */
    	     		close(csock);           
-   	     		return 1;
+   	     		return -1;
    	   		}	
    	   		if(len == 0)
    	   		{
    	    		printf("Socket lezárult\n");
    	     		/* lezárjuk a szerver socketet */
    	     		close(csock);       
-   	     		return 1;
+   	     		return 0;
    	   		}
    	   		if(len > 0)
    	   		{

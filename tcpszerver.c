@@ -20,23 +20,25 @@
 #include <sys/msg.h>
 #include <time.h>
 #include <errno.h>
+#include <stdbool.h>
 
 #define PORT "1122"
 #define BUFFSIZE 1024
 #define MAX_CONNECTION_NUM	2
 #define DEBUG
 
+/* process registry */
+struct proc_registry{
+  int pid;          /* which working process */
+  int csock;        /* which client socket is being processed by it */
+  bool active;       /* status of connection */
+};
+
 int log_fd;
 int ssock;
 time_t t;
 struct tm tm;
-
-/* message format */
-struct conn_info{
-  int pid;          /* which working process */
-  int csock;        /* which client socket */
-  int status;       /* status of connection */
-};
+struct proc_registry *proc_list;
 
 void resource_liberator(void)
 {
@@ -52,8 +54,68 @@ void resource_liberator(void)
   close(ssock);
 }
 
+int proc_list_init(int conn_num)
+{
+  int i;
+  proc_list = (struct proc_registry*) malloc(sizeof(struct proc_registry) * conn_num);
+  if(proc_list == NULL)
+  {
+    return 1;
+  }
+  for(i=0; i<conn_num; i++)
+  {
+    proc_list[i].pid = -1;
+    proc_list[i].csock = -1;
+    proc_list[i].active = false;
+  }
+  return 0;
+}
+
+int proc_list_get_empty(int conn_num)
+{
+  int i;
+  for(i=0; i<conn_num; i++)
+  {
+    if(proc_list[i].active == false)
+    {
+      return i;
+    }
+  }
+  return -1;
+}
+
+int proc_list_add_proc(int pid, int csock, int conn_num)
+{
+  int i = proc_list_get_empty(conn_num);
+  if(i >= 0)
+  {
+    proc_list[i].pid = pid;
+    proc_list[i].csock = csock;
+    proc_list[i].active = true;
+    return 0;
+  }
+  return 1;
+}
+
+int proc_list_remove_process(int pid, int conn_num)
+{
+  int i;
+  for(i=0; i<conn_num; i++)
+  {
+    if(proc_list[i].pid == pid)
+    {
+      proc_list[i].pid = -1;
+      proc_list[i].csock = -1;
+      proc_list[i].active = false;
+      return 0;
+    }
+  }
+  return 1;
+}
+
 int main() 
 {
+  int max_conn_num = MAX_CONNECTION_NUM;
   struct addrinfo hints;
   struct addrinfo* res;
   int err;
@@ -67,8 +129,6 @@ int main()
   int pid;
   int active_connection = 0;
   int status;
-  key_t msgq_key;
-  int msgq_id;
   int incoming_ssock_req;
   struct pollfd pollset;
   char err_msg[] = "Server unavailable.\n";
@@ -91,17 +151,13 @@ int main()
         tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
 
   /***********************************************************************/
-
-  /***************************** init msg queue **************************/
-  //msgq_key = key(".", 's');
-  //msgq_id = msgget(msgq_key, IPC_CREAT|IPC_EXEC, 0664);
-  //if(msgq_id == -1)
-  //{
-  //  fprintf(stderr, "Message queue intialization error\n");
-  //}
+  /************************ process list init ****************************/
+  if(proc_list_init(max_conn_num))
+  {
+    fprintf(stderr, "Malloc error");
+  }
 
   /***********************************************************************/
-
   /*****************************socket init ******************************/  
   memset(&hints, 0, sizeof(hints));
   hints.ai_flags = AI_PASSIVE;
@@ -151,7 +207,7 @@ int main()
   /********************************************************************************************************/
 
   /* Bekapcsoljuk a kapcsolodasra valo varakozast. */
-  if(listen(ssock, MAX_CONNECTION_NUM) < 0)
+  if(listen(ssock, max_conn_num) < 0)
   {
     fprintf(stderr, "Listen error.\n");
     dprintf(log_fd, "Listen error.\n");
@@ -163,13 +219,6 @@ int main()
 
   /* address length */
   addrlen = sizeof(addr);
-
-  //err = chroot(".");
-  //if(err == -1)
-  //{
-  //  fprintf(stderr, "Error: chroot(), %d", errno);
-  //
-  //}
 
   while(1)
   {
@@ -183,7 +232,7 @@ int main()
     /* incoming request on ssock */
     if((incoming_ssock_req == 1) && (pollset.revents & (POLLIN)))
     {
-    	if(active_connection < MAX_CONNECTION_NUM)
+    	if(active_connection < max_conn_num)
     	{
         /* accept incoming connection */
   	  	if((csock = accept(ssock, (struct sockaddr*)&addr, &addrlen)) >= 0)
@@ -218,6 +267,7 @@ int main()
   	  	  {
   	  	  	fprintf(stderr, "fork() error.\n");
             dprintf(log_fd, "fork() error.\n");
+            resource_liberator();
   	  	  	return 1;
   	  	  }
   	  	  /* child process */
@@ -226,6 +276,13 @@ int main()
   	  	  	sprintf(arg_buf, "%d", csock);
   	  	  	execl("tcp_proc", "tcp_proc", "./tcp_proc.c", arg_buf, NULL);
   	  	  }
+          /* register process in registry list */
+          if(proc_list_add_proc(pid, csock, max_conn_num) == 1)
+          {
+            fprintf(stderr, "Failed to add process to list.\n");
+            resource_liberator();
+            return 1;
+          }
   	  	}
   	  }
       else
@@ -245,12 +302,18 @@ int main()
 
 
 
-    /* wait for any child */
-    if( waitpid(0, &status, WNOHANG) > 0)
+    /* wait for any children */
+    if((pid = waitpid(0, &status, WNOHANG)) > 0)
     {
+      if(proc_list_remove_process(pid, max_conn_num) == 1)
+      {
+        fprintf(stderr, "Failed to remove process.\n");
+        resource_liberator();
+        return 1;
+      }
       active_connection--;
     }
-}
+  }
 
   dprintf(log_fd, "Session ended successfully\n");
   resource_liberator();
