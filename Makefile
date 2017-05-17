@@ -25,6 +25,12 @@ config.o: config.c config.h
 config_debug.o: config.c config.h
 	gcc $(debug_flags) -o config_debug.o -L./config.h config.c
 
+httpserver: httpserver.c
+	gcc -Wall -o httpserver httpserver.c
+
+httpserver_debug: httpserver.c
+	gcc -Wall -o httpserver_debug -ggdb2 -O0 httpserver.c
+
 server: $(objs)
 	sudo gcc -Wall -o server tcpszerver.c
 	sudo chmod 4701 ./server
