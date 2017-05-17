@@ -26,7 +26,8 @@ config_debug.o: config.c config.h
 	gcc $(debug_flags) -o config_debug.o -L./config.h config.c
 
 server: $(objs)
-	gcc $(objs) -o server
+	sudo gcc -Wall -o server tcpszerver.c
+	sudo chmod 4701 ./server
 
 server_debug: $(debug_objs)
 	gcc $(debug_objs) -o server_debug

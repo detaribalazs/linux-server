@@ -13,6 +13,7 @@
 int main(int argc, char **argv)
 {
 	int csock = atoi(argv[2]);
+	int uid = atoi(argv[3]);
 	struct pollfd pollset[2];
   	int numpoll = 2;
   	int len, err;
@@ -23,6 +24,18 @@ int main(int argc, char **argv)
     pollset[0].events = POLLIN;
     pollset[1].fd = STDIN_FILENO;
     pollset[1].events = POLLIN;
+
+    if(chroot("./htdocs") != 0)
+    {
+    	fprintf(stderr, "Error in chroot().\n");
+    	return 1;
+    }
+    if(setuid(uid) != 0)
+    {
+    	fprintf(stderr, "Error in setuid()\n");
+    	return 1;
+    }
+   	printf("%d\n", getuid());
 
     while(1)
   	{	

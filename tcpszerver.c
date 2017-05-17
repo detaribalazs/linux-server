@@ -125,13 +125,15 @@ int main()
   char servs[NI_MAXSERV];
   int csock;
   int reuse;
-  char arg_buf[16];
+  char csock_buf[16];
+  char uid_buf[16];
   int pid;
   int active_connection = 0;
   int status;
   int incoming_ssock_req;
   struct pollfd pollset;
   char err_msg[] = "Server unavailable.\n";
+  int uid = getuid();
 
   /**************************** logfile init ****************************/
   log_fd = open("./logfile.log", O_APPEND|O_CREAT|O_WRONLY, 0644);
@@ -273,8 +275,9 @@ int main()
   	  	  /* child process */
   	  	  if(pid == 0)
   	  	  {		
-  	  	  	sprintf(arg_buf, "%d", csock);
-  	  	  	execl("tcp_proc", "tcp_proc", "./tcp_proc.c", arg_buf, NULL);
+  	  	  	sprintf(csock_buf, "%d", csock);
+            sprintf(uid_buf, "%d", uid);
+  	  	  	execl("tcp_proc", "tcp_proc", "./tcp_proc.c", csock_buf, uid_buf, NULL);
   	  	  }
           /* register process in registry list */
           if(proc_list_add_proc(pid, csock, max_conn_num) == 1)
