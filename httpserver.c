@@ -12,6 +12,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 
+#define DEBUG
 
 #define MAX_LINE_LENGTH 	256
 #define MAX_METHOD_LENGTH 	7
@@ -320,15 +321,13 @@ int create_resp_header(int status, int protocol, char *content,
 	struct tm tm;
 	char server[] = SERVER_NAME;
 	char date[70];
-	char empty_line[2] ="\n";
+	char empty_line[2] ="\r\n";
 	char content_length[40]; 
 	char *content_type;
 	char *status_line;
 
 	/* status line */
-	status_line = (char*) malloc(sizeof(char) * (strlen(protocols[protocol]) + 
-												 strlen(statuses[status]) +
-												  4) );
+	status_line = (char*) malloc(sizeof(char) * (strlen(protocols[protocol]) + strlen(statuses[status]) + 4) );
 	err = create_status_line(status, protocol, status_line);
 	if(err != 0)
 	{
@@ -444,20 +443,33 @@ int create_response(const char *request)
 		status = 5;
 	}
 	get_param_num = get_get_param_num(line_list[0]);
-	printf("%d\n", get_param_num);
 	post_param_num = get_post_param_num(line_list[line_num-1]);
+	#ifdef DEBUG
+	printf("%d\n", get_param_num);
 	printf("%d\n", post_param_num);
-	get_get_parameters(line_list[0], get_parameters);
-	printf("%s\n", get_parameters);
-	get_post_parameters(line_list[line_num-1], post_parameters);
-	printf("%s\n", post_parameters);
+	#endif
+	if(get_param_num > 0)
+	{
+		get_get_parameters(line_list[0], get_parameters);
+		#ifdef DEBUG
+		printf("%s\n", get_parameters);
+		#endif
+	}
+	if(post_param_num > 0)
+	{
+		get_post_parameters(line_list[line_num-1], post_parameters);
+		#ifdef DEBUG
+		printf("%s\n", post_parameters);
+		#endif
+	}
+	
 	free(line_list);
 	/******************************* open files ***************************************/
 	//TODO find out, why O_TMPFILE doesnt work...
 	while(!tmp_flag)
 	{
 		srand(time(NULL));
-		sprintf(tmp_file_name, "./tmp%d.html", (int)(rand()*MAX_CON_NUM));
+		sprintf(tmp_file_name, "./tmp%d", (int)(rand()*MAX_CON_NUM));
 		tmp_fd = open(tmp_file_name, O_RDONLY);
 		if(tmp_fd < 0)
 		{
@@ -536,7 +548,7 @@ int create_response(const char *request)
 				} 
 
 				/* print completition */
-				dprintf(tmp_php_fd, "%s\n", PHP_COMPLETITION);
+				dprintf(tmp_php_fd, "%s", PHP_COMPLETITION);
 
 				/* open requested file */
 				req_fd = open(uri_buf, O_RDONLY);
@@ -580,7 +592,7 @@ int create_response(const char *request)
 				lseek(req_fd, 0, SEEK_SET);
 				
 				create_resp_header(status, protocol, "text/html", req_size, tmp_fd);
-				sendfile(tmp_fd, req_fd, NULL, req_size);
+				//sendfile(tmp_fd, req_fd, NULL, req_size);
 				//printf("%s\n", strerror(errno));
 				return tmp_fd;
 			}
@@ -592,8 +604,102 @@ int create_response(const char *request)
 		break;
 		/* post */
 		case 3:
-			/* todo implement post */
+			sprintf(uri_buf, ".%s", uri);
 
+
+			/* it's a php file */
+			if(strstr(uri, ".php") != NULL)
+			{
+				req_fd = open(uri_buf, O_RDONLY);
+
+				/* open temporal php file for completion */
+				while(!tmp_php_flag)
+				{
+					srand(time(NULL));
+					sprintf(tmp_php_file_name, "./tmp_php%d.php", (int)(rand()*MAX_CON_NUM));
+					tmp_php_fd = open(tmp_php_file_name, O_RDONLY);
+					if(tmp_php_fd < 0)
+					{
+						tmp_php_fd = open(tmp_php_file_name, O_CREAT|O_RDWR|O_TRUNC, 0600);
+						if(tmp_php_fd > 0)
+						{
+							tmp_php_flag = true;
+						}
+					}
+					else
+					{
+						close(tmp_php_fd);
+					}
+				}
+				/* open temporal html for storing php generated */
+				while(!tmp_html_flag)
+				{
+					srand(time(NULL));
+					sprintf(tmp_html_file_name, "./tmp_html%d.html", (int)(rand()*MAX_CON_NUM));
+					tmp_html_fd = open(tmp_html_file_name, O_RDONLY);
+					if(tmp_html_fd < 0)
+					{
+						tmp_html_fd = open(tmp_html_file_name, O_CREAT|O_RDWR|O_TRUNC, 0600);
+						if(tmp_html_fd > 0)
+						{
+							tmp_html_flag = true;
+						}
+					}
+					else
+					{
+						close(tmp_html_fd);
+					}
+				} 
+
+				/* print completition */
+				dprintf(tmp_php_fd, "%s", PHP_COMPLETITION);
+
+				/* open requested file */
+				req_fd = open(uri_buf, O_RDONLY);
+				if(req_fd == -1)
+				{
+					fprintf(stderr, "Error in open file %s", uri_buf);
+					status = 1;
+				}
+				req_size = lseek(req_fd, 0, SEEK_END);
+				if(req_size < 0)
+				{
+					req_size = 0;
+				}
+				lseek(req_fd, 0, SEEK_SET);
+				sendfile(tmp_php_fd, req_fd, NULL, req_size);
+				sprintf(command, "php %s \"%s\" > %s", tmp_php_file_name, post_parameters, tmp_html_file_name);
+				system(command);
+				req_size = lseek(tmp_html_fd, 0, SEEK_END);
+				lseek(tmp_html_fd, 0, SEEK_SET);
+
+				create_resp_header(status, protocol, "text/html", req_size, tmp_fd);
+				sendfile(tmp_fd, tmp_html_fd, NULL, req_size);
+			}
+
+			/* it's a html file */
+			if(strstr(uri, ".html") != NULL)
+			{
+				/* open requested file */
+				req_fd = open(uri_buf, O_RDONLY);
+				if(req_fd == -1)
+				{
+					fprintf(stderr, "Error in open file %s", uri_buf);
+					status = 1;
+				}
+
+				req_size = lseek(req_fd, 0, SEEK_END);
+				if(req_size < 0)
+				{
+					req_size = 0;
+				}
+				lseek(req_fd, 0, SEEK_SET);
+				
+				create_resp_header(status, protocol, "text/html", req_size, tmp_fd);
+				//sendfile(tmp_fd, req_fd, NULL, req_size);
+				//printf("%s\n", strerror(errno));
+				return tmp_fd;
+			}
 
 		break;
 		/* put */
@@ -643,7 +749,7 @@ Accept-Language: hu,en-US;q=0.8,en;q=0.6,de;q=0.4\r\n\
 \r\n\
 bookId=12345&author=Karl+Marx";
 	
-	const char request2[] = "GET /index.php?bookId=12345&author=Karl+Marx&title=My+Book HTTP/1.1\r\n\
+	const char request2[] = "POST /index.php HTTP/1.1\r\n\
 Host: localhost:1122\r\n\
 Connection: keep-alive\r\n\
 Upgrade-Insecure-Requests: 1\r\n\
@@ -654,7 +760,7 @@ Accept-Language: hu,en-US;q=0.8,en;q=0.6,de;q=0.4\r\n\
 \r\n\
 bookId=12345&author=Karl+Marx&title=My+Book";
 
-	fd = create_response(request);
+	fd = create_response(request2);
 	close(fd);
 	return 0;
 }
