@@ -9,12 +9,13 @@
 #include <time.h>
 #include <errno.h>
 #include <sys/sendfile.h>
+#include <ctype.h>
 
 #define MAX_LINE_LENGTH 	256
 #define MAX_METHOD_LENGTH 	7
 #define METHODS {"OPTIONS", "GET", "HEAD", "POST", "PUT", "DELETE", "TRACE", "CONNECT"}
 #define METHOD_NUM			8
-#define MAX_URI_LENGTH		64
+#define MAX_URI_LENGTH		2000
 #define PROTOCOLS {"HTTP/1.0", "HTTP/1.1"}
 #define PROTOCOL_NUM		2
 #define MAX_PROTOCOL_LENGTH 8
@@ -22,14 +23,16 @@
 #define STATUS_NUM 			6
 #define MAX_CON_NUM			3
 #define SERVER_NAME			"Server: dbalazs server v1.0\r\n"
+#define MAX_PARAMETER_LENGTH 1500
+#define PHP_COMPLETITION	"<?php \
+if (!isset($_SERVER[\"HTTP_HOST\"])) \
+	{ \
+  	parse_str($argv[1], $_GET); \
+  	parse_str($argv[1], $_POST); \
+	} \
+?>"
 
 /* free pointers : line list, file buffer, status_line, resp_header_buffer */
-
-// TODO implement general error handler */
-void send_server_err_msg(void)
-{
-	char buf[] = "HTTP/1.0 500 Internal Server Error\r\n";
-}
 
 int get_line_num(const char *request)
 {
@@ -108,7 +111,7 @@ int get_uri(char * request_line, char * uri)
 		c = request_line[i];
 		i++;
 	}
-	while(j<MAX_URI_LENGTH && request_line[i] != ' ')
+	while(j<MAX_URI_LENGTH && request_line[i] != ' ' && request_line[i] != '?')
 	{
 		uri[j] = request_line[i];
 		j++;
@@ -120,6 +123,133 @@ int get_uri(char * request_line, char * uri)
 	}
 	uri[j] = '\0';
 	return 0;
+}
+
+int get_get_param_num(const char* request_line)
+{
+	int i=0;
+	char c = 0;
+	int param_num = 0;
+
+	/* go through method */
+	while(c != ' ')
+	{
+		c = request_line[i];
+		i++;
+	}
+	c = request_line[i];
+	/* beggining of uri */
+	while(c != '?'  && c != ' ')
+	{
+		c = request_line[i];
+		i++;	
+	}
+	if(c == ' ')
+	{
+		/* no param */
+		return 0;
+	}
+
+	if(c == '?')
+	{
+		param_num++; // c = request_line[i];
+		while(c != '#' && c != ' ' && i != MAX_URI_LENGTH)
+		{
+			c = request_line[i];
+			i++;
+			if(c == '&')
+			{
+				param_num++;
+			}
+		}
+	}
+	return param_num;
+}
+
+int get_get_parameters(const char * request_line, char *parameters)
+{
+	int i=0, j=0;
+	char c = 0;
+	int param_num = 0;
+
+	/* go through method */
+	while(c != ' ')
+	{
+		c = request_line[i];
+		i++;
+	}
+	/* i at begginning of URI */
+	c = request_line[i];
+	while(c != '?')
+	{
+		c = request_line[i];
+		i++;
+	}
+	while(request_line[i] != ' ' && j != MAX_PARAMETER_LENGTH)
+	{
+		parameters[j] = request_line[i];
+		i++;
+		j++;
+	}
+	if(j == MAX_PARAMETER_LENGTH)
+	{
+		return 1;
+	}	
+	parameters[j] = '\0';
+	return 0;
+}
+
+int get_post_parameters(const char * request_line, char *parameters)
+{
+	int i=0, j=0;
+	char c = 0;
+	int param_num = 0;
+	
+	if(request_line[0] == '\r' || c == '\n')
+	{
+		return 0;
+	}
+	parameters[0] = tolower(request_line[0]);
+	i++;
+	j++;
+	while(request_line[i] != '\0' && j != MAX_PARAMETER_LENGTH)
+	{
+		parameters[j] = request_line[i];
+		i++;
+		j++;
+	}
+	if(j == MAX_PARAMETER_LENGTH)
+	{
+		return 1;
+	}	
+	parameters[j] = '\0';
+	return 0;
+}
+
+int get_post_param_num(const char* request_line)
+{
+	int i=0;
+	char c = 0;
+	int param_num = 0;
+
+	c = request_line[i];
+	i++;
+
+	if(c == '\r' || c == '\n')
+	{
+		return 0;
+	}
+	param_num++; // c = request_line[i];
+	while(c != '#' && c != ' ' && i != MAX_URI_LENGTH)
+	{
+		c = request_line[i];
+		i++;
+		if(c == '&')
+		{
+			param_num++;
+		}
+	}
+	return param_num;
 }
 
 int get_protocol(char * request_line)
@@ -175,26 +305,10 @@ int create_status_line(int status, int protocol, char *status_line)
 	return 0;
 }
 
-int calc_resp_header_size(int status, int protocol, char *content, int content_len)
-{
-	char *protocols[] = PROTOCOLS;
-	char *statuses[] = STATUSES;
-	int status_line = strlen(protocols[protocol]) + strlen(statuses[status]) + 4;
-	int date = 37;
-	int server = strlen(SERVER_NAME);
-	char tmp[50];
-	int content_length;
-	int content_type = strlen(content) + 16;
-	int empty_line = 2;
-
-	sprintf(tmp, "%d", content_len);
-	content_length = 18 + strlen(tmp);
-	return (status_line + date + server + content_length + content_type + empty_line);
-}
-
 int create_resp_header(int status, int protocol, char *content, 
 					   int content_len, int fd)
 {
+	protocol = 0;
 	char *protocols[] = PROTOCOLS;
 	char *statuses[] = STATUSES;
 	int err;
@@ -228,7 +342,6 @@ int create_resp_header(int status, int protocol, char *content,
 		return 1;
 	}
 	sprintf(content_type, "Content-Type: %s\r\n", content);
-	printf("%s\n", content_type);
 
 	/* date */
 	t = time(NULL);
@@ -261,7 +374,8 @@ int create_response(const char *request)
 	int line_num;
 
 	char uri[MAX_URI_LENGTH];
-
+	char get_paramters[MAX_PARAMETER_LENGTH];
+	char post_parameters[MAX_PARAMETER_LENGTH];
 
 	struct stat req_inode;
 	int req_fd;
@@ -273,6 +387,12 @@ int create_response(const char *request)
 	time_t curr_time;
 	char tmp_file_name[50];
 	int req_size, err, i;
+	int get_param_num;
+	int post_param_num;
+
+	int tmp_php_fd;
+	bool tmp_php_flag = false;
+	char tmp_php_file_name[50];
 
 	/******************************* init line list *****************************/
 	line_num = get_line_num(request);
@@ -304,7 +424,6 @@ int create_response(const char *request)
 		fprintf(stderr, "Unknown resource\n");
 		/* bad request */
 		status = 5;
-		/* TODO send URI too long response */
 	}
 	
 	protocol = get_protocol(line_list[0]);
@@ -314,6 +433,14 @@ int create_response(const char *request)
 		/* bad request */
 		status = 5;
 	}
+	get_param_num = get_get_param_num(line_list[0]);
+	printf("%d\n", get_param_num);
+	post_param_num = get_post_param_num(line_list[line_num-1]);
+	printf("%d\n", post_param_num);
+	get_get_parameters(line_list[0], get_paramters);
+	printf("%s\n", get_paramters);
+	get_post_parameters(line_list[line_num-1], post_parameters);
+	printf("%s\n", post_parameters);
 	free(line_list);
 	/******************************* open files ***************************************/
 	//TODO find out, why O_TMPFILE doesnt work...
@@ -338,10 +465,8 @@ int create_response(const char *request)
 
 	if(status != 0)
 	{
-		if(status == 2)
-		{
-			//http_send_unimplemented(fp)
-		}
+		create_resp_header(status, protocol, "text/html", 0, tmp_fd);
+		return tmp_fd;
 	}
 
 	switch(method){
@@ -360,6 +485,45 @@ int create_response(const char *request)
 			if(strstr(uri, ".php") != NULL)
 			{
 				req_fd = open(uri_buf, O_RDONLY);
+
+				/* open temporal php file for completion */
+				while(!tmp_php_flag)
+				{
+					srand(time(NULL));
+					sprintf(tmp_php_file_name, "./tmp_php%d.php", (int)(rand()*MAX_CON_NUM));
+					tmp_php_fd = open(tmp_php_file_name, O_RDONLY);
+					if(tmp_php_fd < 0)
+					{
+						tmp_php_fd = open(tmp_php_file_name, O_CREAT|O_RDWR|O_TRUNC, 0600);
+						if(tmp_php_fd > 0)
+						{
+							tmp_php_flag = true;
+						}
+					}
+					else
+					{
+						close(tmp_php_fd);
+					}
+				}
+
+				/* print completition */
+				dprintf(tmp_php_fd, "%s\n", PHP_COMPLETITION);
+
+				/* open requested file */
+				req_fd = open(uri_buf, O_RDONLY);
+				if(req_fd == -1)
+				{
+					fprintf(stderr, "Error in open file %s", uri_buf);
+					status = 1;
+				}
+				req_size = lseek(req_fd, 0, SEEK_END);
+				if(req_size < 0)
+				{
+					req_size = 0;
+				}
+				lseek(req_fd, 0, SEEK_SET);
+				sendfile(tmp_php_fd, req_fd, NULL, req_size);
+
 			}
 
 			/* it's a html file */
@@ -374,46 +538,58 @@ int create_response(const char *request)
 				}
 
 				req_size = lseek(req_fd, 0, SEEK_END);
+				if(req_size < 0)
+				{
+					req_size = 0;
+				}
 				lseek(req_fd, 0, SEEK_SET);
 				
 				create_resp_header(status, protocol, "text/html", req_size, tmp_fd);
 				sendfile(tmp_fd, req_fd, NULL, req_size);
-				printf("%s\n", strerror(errno));
+				//printf("%s\n", strerror(errno));
 				return tmp_fd;
 			}
 		break;
 		/* head */
 		case 2:
-
+			status = 2;
+			create_resp_header(status, protocol, "text/html", 0, tmp_fd);
 		break;
 		/* post */
 		case 3:
+			/* todo implement post */
+
 
 		break;
 		/* put */
 		case 4:
+			status = 2;
+			create_resp_header(status, protocol, "text/html", 0, tmp_fd);
 
 		break;
 		/* delete */
 		case 5:
-
+			status = 2;
+			create_resp_header(status, protocol, "text/html", 0, tmp_fd);
 		break;
 		/* trace */
 		case 6:
-
+			status = 2;
+			create_resp_header(status, protocol, "text/html", 0, tmp_fd);
 		break;
 		/* connect */
 		case 7:
-
+			status = 2;
+			create_resp_header(status, protocol, "text/html", 0, tmp_fd);
 		break;
 		/* default */
 		default:
 			fprintf(stderr, "Unknown method in create response.\n");
-			return 1;
+			status = 2;
+			create_resp_header(status, protocol, "text/html", 0, tmp_fd);
+			return -1;
 		break;
 	};
-
-
 }
 
 
@@ -421,7 +597,7 @@ int create_response(const char *request)
 int main(void)
 {
 	int fd;
-	const char request[] = "GET /index.html HTTP/1.1\r\n\
+	const char request[] = "GET /index.php HTTP/1.1\r\n\
 Host: localhost:1122\r\n\
 Connection: keep-alive\r\n\
 Upgrade-Insecure-Requests: 1\r\n\
@@ -432,7 +608,18 @@ Accept-Language: hu,en-US;q=0.8,en;q=0.6,de;q=0.4\r\n\
 \r\n\
 bookId=12345&author=Karl+Marx";
 	
-	fd = create_response(request);
-	//close(fd);
+	const char request2[] = "GET /index.php?bookId=12345&author=Karl+Marx&title=My+Book HTTP/1.1\r\n\
+Host: localhost:1122\r\n\
+Connection: keep-alive\r\n\
+Upgrade-Insecure-Requests: 1\r\n\
+User-Agent: Mozilla/5.0 (X11; Linux x86_64) Chrome/58.0.3029.110 Safari/537.36\r\n\
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\r\n\
+Accept-Encoding: gzip, deflate, sdch, br\r\n\
+Accept-Language: hu,en-US;q=0.8,en;q=0.6,de;q=0.4\r\n\
+\r\n\
+bookId=12345&author=Karl+Marx&title=My+Book";
+
+	fd = create_response(request2);
+	close(fd);
 	return 0;
 }
