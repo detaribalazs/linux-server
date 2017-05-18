@@ -1,11 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
 
 #define MAX_LINE_LENGTH 	256
 #define MAX_METHOD_LENGTH 	7
@@ -15,10 +17,18 @@
 #define PROTOCOLS {"HTTP/1.0", "HTTP/1.1"}
 #define PROTOCOL_NUM		2
 #define MAX_PROTOCOL_LENGTH 8
-#define STATUS 	{"200 OK", "404 Not Found", "501 Not Implemented", "503 Service Unavailable"}
-#define STATUS_NUM 			4
+#define STATUSES 	{"200 OK", "404 Not Found", "501 Not Implemented", "503 Service Unavailable", "500 Internal Server Error"}
+#define STATUS_NUM 			5
+#define MAX_CON_NUM			3
+#define SERVER_NAME			"Server: dbalazs server v1.0\r\n"
 
-/* free pointers : line list, file buffer */
+/* free pointers : line list, file buffer, status_line, resp_header_buffer */
+
+// TODO implement general error handler */
+void send_server_err_msg(void)
+{
+	char buf[] = "HTTP/1.0 500 Internal Server Error\r\n";
+}
 
 int get_line_num(const char *request)
 {
@@ -50,14 +60,18 @@ void get_lines(const char *request, char ** line_list)
 	while(i < line_num)
 	{
 		k = 0;
-		while(request[j] != '\n' && request[j] != '\0')
+		while(request[j] != '\n' && request[j] != '\r' && request[j] != '\0')
 		{
 			line_list[i][k] = request[j];
 			j++;
 			k++;
 		}
-		line_list[i][k] = '\0';
 		j++;
+		if(request[j] == '\r' || request[j] == '\n')
+		{
+			j++;
+		}
+		line_list[i][k] = '\0';
 		i++;
 	}
 }
@@ -142,38 +156,113 @@ int get_protocol(char * request_line)
 	return -1;
 }
 
-int create_status_line(int status, int protocol, int char* status_line)
+int create_status_line(int status, int protocol, char *status_line)
 {
-	char protocols[] = PROTOCOLS;
-	char status[] = "200 OK";
-	status_line = (char*) malloc(sizeof(char) * (strlen(protocols[protocol]) + 
-												 ))
+	char *protocols[] = PROTOCOLS;
+	char *statuses[] = STATUSES;
+	
+	if(status_line == NULL)
+	{
+		fprintf(stderr, "Error in malloc() in create_status_line().\n");
+		return 1;
+	}
+	if( (sprintf(status_line, "%s %s\r\n", protocols[protocol], statuses[status]) < 0) )
+	{
+		fprintf(stderr, "Error in creating status line.");
+		return 1;
+	}
+	return 0;
 }
 
-int create_resp_header(char* header_buffer, int status, )
+int calc_resp_header_size(int status, int protocol, char *content, int content_len)
 {
+	char *protocols[] = PROTOCOLS;
+	char *statuses[] = STATUSES;
+	int status_line = strlen(protocols[protocol]) + strlen(statuses[status]) + 4;
+	int date = 37;
+	int server = strlen(SERVER_NAME);
+	char tmp[50];
+	int content_length;
+	int content_type = strlen(content) + 16;
+	int empty_line = 2;
+
+	sprintf(tmp, "%d", content_len);
+	content_length = 18 + strlen(tmp);
+	return (status_line + date + server + content_length + content_type + empty_line);
+}
+
+int create_resp_header(int status, int protocol, char *content, 
+					   int content_len, char *resp_header_buffer)
+{
+	char *protocols[] = PROTOCOLS;
+	char *statuses[] = STATUSES;
+	int err;
 	time_t t;
 	struct tm tm;
-	char server[] = "Server: dbalazs server v1.0";
+	char server[] = SERVER_NAME;
+	char date[70];
+	char empty_line[2] ="\r\n\0";
+	char content_length[40]; 
+	char *content_type;
+	char *status_line;
 
+	/* status line */
+	status_line = (char*) malloc(sizeof(char) * (strlen(protocols[protocol]) + 
+												 strlen(statuses[status]) +
+												  4) );
+	err = create_status_line(status, protocol, status_line);
+	if(err != 0)
+	{
+		return 1;
+	}
+	printf("%s\n", status_line);
+
+	/* content length */
+	sprintf(content_length, "Content-Length: %d\r\n", content_len);
+
+	/* content type */
+	content_type = (char*)malloc(sizeof(char) * ( strlen(content) + 16) );	// its only 16 but no time for errors
+	if(content_type == NULL)
+	{
+		fprintf(stderr, "Error in malloc() in create_response_header() content type.\n");
+		return 1;
+	}
+	sprintf(content_type, "Content-Type: %s\r\n", content);
+
+	/* date */
 	t = time(NULL);
-  	tm = *localtime(&t);
+  	tm = *gmtime(&t);
 
+  	strftime(date, 70, "Date: %a, %d %b %Y %T GMT\r\n", &tm);
+
+	/* create response header */  	
+	sprintf(resp_header_buffer, "%s%s%s%s%s%s", status_line, date, server, content_length,
+												content_type, empty_line);
+	free(content_type);
+  	free(status_line);
+	return 0;
 }
 
 /* return temporal file descriptor */
-int create_response(int method, char *uri, char *)
+int create_response(int method, char *uri, int protocol)
 {
+	char *protocols[] = PROTOCOLS;
+	char *statuses[] = STATUSES;
+	char *status_line;
+	char *resp_header_buffer;
 	struct stat req_inode;
 	int req_fd;
 	int req_file_size;
 	int tmp_fd;
+	bool tmp_flag = false;
 	char uri_buf[MAX_URI_LENGTH];
 	time_t mtime;
 	time_t curr_time;
+	char tmp_file_name[50];
+	int req_size;
+	int status = 0;
 
-	switch method{
-		{"OPTIONS", "GET", "HEAD", "POST", "PUT", "DELETE", "TRACE", "CONNECT"}
+	switch(method){
 		/* options */
 		case 0:
 		/* it's a php file */
@@ -181,7 +270,6 @@ int create_response(int method, char *uri, char *)
 		{
 			sprintf(uri_buf, "./%s", uri);
 			req_fd = open(uri_buf, O_RDONLY);
-			if(req_fd == -1)
 		}
 		/* it's a html file */
 		if(strstr(uri, ".html") != NULL)
@@ -192,25 +280,46 @@ int create_response(int method, char *uri, char *)
 			if(req_fd == -1)
 			{
 				fprintf(stderr, "Error in open file %s", uri_buf);
-				return 1;
+				status = 1;
 			}
 
-			/* open requested file inode */
-			if(lstat(uri_buf, &req_inode) < 0)
+			req_size = lseek(req_fd, 0, SEEK_END);
+			lseek(req_fd, 0, SEEK_SET);
+			///* open requested file inode */
+			//if(lstat(uri_buf, &req_inode) < 0)
+			//{
+			//	fprintf(stderr, "Error opening indode.\n");
+			//}
+			//mtime = req_inode.st_mtime;
+
+			//TODO find out, why O_TMPFILE doesnt work...
+			while(!tmp_flag)
 			{
-				fprintf(stderr, "Error opening indode.\n");
-				return 1;
+				srand(time(NULL));
+				sprintf(tmp_file_name, "./tmp%d", (int)(rand()*MAX_CON_NUM));
+				tmp_fd = open(tmp_file_name, O_RDONLY);
+				if(tmp_fd < 0)
+				{
+					tmp_fd = open(tmp_file_name, O_CREAT|O_RDWR, 0600);
+					if(tmp_fd > 0)
+					{
+						tmp_flag = true;
+					}
+				}
 			}
-			mtime = req_inode.mtime;
-
-
-			tmp_fd = open("./", O_TMPFILE|O_RDWR);
-			if(req_fd == -1)
+			resp_header_buffer = (char*) malloc(sizeof(char) 
+												* calc_resp_header_size(0, 0, "text/html", 10));
+			if(resp_header_buffer == NULL)
 			{
-				fprintf(stderr, "Error in open temporal file.\n");
-				return 1;
+				fprintf(stderr, "Error in malloc() in create_response_header() resp header buffer.\n");
+				return -11;
 			}
-			create_resp_header()
+
+			create_resp_header(statuses[status], protocols[protocol], "text/html", req_size, resp_header_buffer);
+			dprintf(req_fd, "%s", resp_header_buffer);
+			free(resp_header_buffer);
+			sendfile(req_fd, tmp_fd, 0, req_size);
+			return tmp_fd;
 		}
 
 
@@ -259,6 +368,7 @@ int create_response(int method, char *uri, char *)
 int main(void)
 {
 	int i, err;
+	int fd;
 
 	char **line_list;
 	int line_num;
@@ -271,15 +381,17 @@ int main(void)
 	char *protocols[] = PROTOCOLS;
 	int protocol;
 
-	const char request[] = "GET /index.html HTTP/1.1\n\
-Host: localhost:1122\n\
-Connection: keep-alive\n\
-Upgrade-Insecure-Requests: 1\n\
-User-Agent: Mozilla/5.0 (X11; Linux x86_64) Chrome/58.0.3029.110 Safari/537.36\n\
-Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\n\
-Accept-Encoding: gzip, deflate, sdch, br\n\
-Accept-Language: hu,en-US;q=0.8,en;q=0.6,de;q=0.4\n\
-\n\
+	char *resp_header_buffer;
+
+	const char request[] = "GET /index.html HTTP/1.1\r\n\
+Host: localhost:1122\r\n\
+Connection: keep-alive\r\n\
+Upgrade-Insecure-Requests: 1\r\n\
+User-Agent: Mozilla/5.0 (X11; Linux x86_64) Chrome/58.0.3029.110 Safari/537.36\r\n\
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\r\n\
+Accept-Encoding: gzip, deflate, sdch, br\r\n\
+Accept-Language: hu,en-US;q=0.8,en;q=0.6,de;q=0.4\r\n\
+\r\n\
 bookId=12345&author=Karl+Marx";
 	
 	/*********************** init memory for header **************************/
@@ -329,7 +441,18 @@ bookId=12345&author=Karl+Marx";
 		/* TODO send URI too long response */
 		return 1;
 	}
-	printf("%s\n", protocols[protocol]);
+	printf("%s\t%d\n", protocols[protocol], strlen(protocols[protocol]));
 
+	printf("%d\n", calc_resp_header_size(0, 0, "text/html", 10));
+	resp_header_buffer = (char*) malloc(sizeof(char) 
+		* calc_resp_header_size(0, 0, "text/html", 10));
+	free(resp_header_buffer);
+	if(resp_header_buffer == NULL)
+	{
+		fprintf(stderr, "Error in malloc() in create_response_header() resp header buffer.\n");
+		return 1;
+	}
+	fd = create_response(method, uri, protocol);
+	close(fd);
 	return 0;
 }

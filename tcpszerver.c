@@ -136,6 +136,7 @@ int main()
   int uid = getuid();
 
   /**************************** logfile init ****************************/
+  // TODO O_EXCL
   log_fd = open("./logfile.log", O_APPEND|O_CREAT|O_WRONLY, 0644);
   if(log_fd < 0)
   {
