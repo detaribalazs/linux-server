@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <errno.h>
+#include <sys/sendfile.h>
 
 #define MAX_LINE_LENGTH 	256
 #define MAX_METHOD_LENGTH 	7
@@ -17,8 +18,8 @@
 #define PROTOCOLS {"HTTP/1.0", "HTTP/1.1"}
 #define PROTOCOL_NUM		2
 #define MAX_PROTOCOL_LENGTH 8
-#define STATUSES 	{"200 OK", "404 Not Found", "501 Not Implemented", "503 Service Unavailable", "500 Internal Server Error"}
-#define STATUS_NUM 			5
+#define STATUSES 	{"200 OK", "404 Not Found", "501 Not Implemented", "503 Service Unavailable", "500 Internal Server Error", "400 Bad Request"}
+#define STATUS_NUM 			6
 #define MAX_CON_NUM			3
 #define SERVER_NAME			"Server: dbalazs server v1.0\r\n"
 
@@ -192,7 +193,7 @@ int calc_resp_header_size(int status, int protocol, char *content, int content_l
 }
 
 int create_resp_header(int status, int protocol, char *content, 
-					   int content_len, char *resp_header_buffer)
+					   int content_len, int fd)
 {
 	char *protocols[] = PROTOCOLS;
 	char *statuses[] = STATUSES;
@@ -201,7 +202,7 @@ int create_resp_header(int status, int protocol, char *content,
 	struct tm tm;
 	char server[] = SERVER_NAME;
 	char date[70];
-	char empty_line[2] ="\r\n\0";
+	char empty_line[2] ="\n";
 	char content_length[40]; 
 	char *content_type;
 	char *status_line;
@@ -215,8 +216,7 @@ int create_resp_header(int status, int protocol, char *content,
 	{
 		return 1;
 	}
-	printf("%s\n", status_line);
-
+	//printf("%s", status_line);
 	/* content length */
 	sprintf(content_length, "Content-Length: %d\r\n", content_len);
 
@@ -228,6 +228,7 @@ int create_resp_header(int status, int protocol, char *content,
 		return 1;
 	}
 	sprintf(content_type, "Content-Type: %s\r\n", content);
+	printf("%s\n", content_type);
 
 	/* date */
 	t = time(NULL);
@@ -236,7 +237,7 @@ int create_resp_header(int status, int protocol, char *content,
   	strftime(date, 70, "Date: %a, %d %b %Y %T GMT\r\n", &tm);
 
 	/* create response header */  	
-	sprintf(resp_header_buffer, "%s%s%s%s%s%s", status_line, date, server, content_length,
+	dprintf(fd, "%s%s%s%s%s%s", status_line, date, server, content_length,
 												content_type, empty_line);
 	free(content_type);
   	free(status_line);
@@ -244,12 +245,24 @@ int create_resp_header(int status, int protocol, char *content,
 }
 
 /* return temporal file descriptor */
-int create_response(int method, char *uri, int protocol)
+int create_response(const char *request)
 {
+	//{"200 OK", "404 Not Found", "501 Not Implemented", "503 Service Unavailable", "500 Internal Server Error", "400 Bad Request"}
 	char *protocols[] = PROTOCOLS;
+	int protocol;
+
 	char *statuses[] = STATUSES;
-	char *status_line;
-	char *resp_header_buffer;
+	int status = 0;
+
+	char *methods[] = METHODS;
+	int method;
+
+	char **line_list;
+	int line_num;
+
+	char uri[MAX_URI_LENGTH];
+
+
 	struct stat req_inode;
 	int req_fd;
 	int req_file_size;
@@ -259,75 +272,115 @@ int create_response(int method, char *uri, int protocol)
 	time_t mtime;
 	time_t curr_time;
 	char tmp_file_name[50];
-	int req_size;
-	int status = 0;
+	int req_size, err, i;
+
+	/******************************* init line list *****************************/
+	line_num = get_line_num(request);
+	line_list =(char **)malloc(sizeof(char*) * line_num);
+	for(i=0; i<line_num; i++)
+	{
+		line_list[i] = (char *)malloc(sizeof(char) * MAX_LINE_LENGTH);
+	}
+
+	if(line_list == NULL)
+	{
+		fprintf(stderr, "Error in malloc().\n");
+		/* internal server error */
+		status = 4;
+	}
+	get_lines(request, line_list);
+	/******************************************************************************/
+	/******************************* get paramters ********************************/
+	method = get_method(line_list[0]);
+	if( (method) < 0)
+	{
+		fprintf(stderr, "Unknown method\n");
+		/* bad request */
+		status = 5;			
+	}
+	err = get_uri(line_list[0], uri);
+	if(err)
+	{
+		fprintf(stderr, "Unknown resource\n");
+		/* bad request */
+		status = 5;
+		/* TODO send URI too long response */
+	}
+	
+	protocol = get_protocol(line_list[0]);
+	if(protocol < 0)
+	{
+		fprintf(stderr, "Unknown protocol\n");
+		/* bad request */
+		status = 5;
+	}
+	free(line_list);
+	/******************************* open files ***************************************/
+	//TODO find out, why O_TMPFILE doesnt work...
+	while(!tmp_flag)
+	{
+		srand(time(NULL));
+		sprintf(tmp_file_name, "./tmp%d", (int)(rand()*MAX_CON_NUM));
+		tmp_fd = open(tmp_file_name, O_RDONLY);
+		if(tmp_fd < 0)
+		{
+			tmp_fd = open(tmp_file_name, O_CREAT|O_RDWR|O_TRUNC, 0600);
+			if(tmp_fd > 0)
+			{
+				tmp_flag = true;
+			}
+		}
+		else
+		{
+			close(tmp_fd);
+		}
+	}
+
+	if(status != 0)
+	{
+		if(status == 2)
+		{
+			//http_send_unimplemented(fp)
+		}
+	}
 
 	switch(method){
 		/* options */
 		case 0:
-		/* it's a php file */
-		if(strstr(uri, ".php") != NULL)
-		{
-			sprintf(uri_buf, "./%s", uri);
-			req_fd = open(uri_buf, O_RDONLY);
-		}
-		/* it's a html file */
-		if(strstr(uri, ".html") != NULL)
-		{
-			sprintf(uri_buf, "./%s", uri);
-			/* open requested file */
-			req_fd = open(uri_buf, O_RDONLY);
-			if(req_fd == -1)
-			{
-				fprintf(stderr, "Error in open file %s", uri_buf);
-				status = 1;
-			}
-
-			req_size = lseek(req_fd, 0, SEEK_END);
-			lseek(req_fd, 0, SEEK_SET);
-			///* open requested file inode */
-			//if(lstat(uri_buf, &req_inode) < 0)
-			//{
-			//	fprintf(stderr, "Error opening indode.\n");
-			//}
-			//mtime = req_inode.st_mtime;
-
-			//TODO find out, why O_TMPFILE doesnt work...
-			while(!tmp_flag)
-			{
-				srand(time(NULL));
-				sprintf(tmp_file_name, "./tmp%d", (int)(rand()*MAX_CON_NUM));
-				tmp_fd = open(tmp_file_name, O_RDONLY);
-				if(tmp_fd < 0)
-				{
-					tmp_fd = open(tmp_file_name, O_CREAT|O_RDWR, 0600);
-					if(tmp_fd > 0)
-					{
-						tmp_flag = true;
-					}
-				}
-			}
-			resp_header_buffer = (char*) malloc(sizeof(char) 
-												* calc_resp_header_size(0, 0, "text/html", 10));
-			if(resp_header_buffer == NULL)
-			{
-				fprintf(stderr, "Error in malloc() in create_response_header() resp header buffer.\n");
-				return -11;
-			}
-
-			create_resp_header(statuses[status], protocols[protocol], "text/html", req_size, resp_header_buffer);
-			dprintf(req_fd, "%s", resp_header_buffer);
-			free(resp_header_buffer);
-			sendfile(req_fd, tmp_fd, 0, req_size);
-			return tmp_fd;
-		}
-
-
+		
 		break;
+
+
 		/* get */
 		case 1:
+			sprintf(uri_buf, ".%s", uri);
 
 
+			/* it's a php file */
+			if(strstr(uri, ".php") != NULL)
+			{
+				req_fd = open(uri_buf, O_RDONLY);
+			}
+
+			/* it's a html file */
+			if(strstr(uri, ".html") != NULL)
+			{
+				/* open requested file */
+				req_fd = open(uri_buf, O_RDONLY);
+				if(req_fd == -1)
+				{
+					fprintf(stderr, "Error in open file %s", uri_buf);
+					status = 1;
+				}
+
+				req_size = lseek(req_fd, 0, SEEK_END);
+				lseek(req_fd, 0, SEEK_SET);
+				
+				create_resp_header(status, protocol, "text/html", req_size, tmp_fd);
+				sendfile(tmp_fd, req_fd, NULL, req_size);
+				printf("%s\n", strerror(errno));
+				return tmp_fd;
+			}
 		break;
 		/* head */
 		case 2:
@@ -367,22 +420,7 @@ int create_response(int method, char *uri, int protocol)
 
 int main(void)
 {
-	int i, err;
 	int fd;
-
-	char **line_list;
-	int line_num;
-
-	char *methods[] = METHODS;
-	int method;
-
-	char uri[MAX_URI_LENGTH];
-
-	char *protocols[] = PROTOCOLS;
-	int protocol;
-
-	char *resp_header_buffer;
-
 	const char request[] = "GET /index.html HTTP/1.1\r\n\
 Host: localhost:1122\r\n\
 Connection: keep-alive\r\n\
@@ -394,65 +432,7 @@ Accept-Language: hu,en-US;q=0.8,en;q=0.6,de;q=0.4\r\n\
 \r\n\
 bookId=12345&author=Karl+Marx";
 	
-	/*********************** init memory for header **************************/
-	line_num = get_line_num(request);
-	line_list =(char **)malloc(sizeof(char*) * line_num);
-	for(i=0; i<line_num; i++)
-	{
-		line_list[i] = (char *)malloc(sizeof(char) * MAX_LINE_LENGTH);
-	}
-
-	if(line_list == NULL)
-	{
-		fprintf(stderr, "Error in malloc().\n");
-		return 1;
-	}
-	/***************************************************************************/
-
-	printf("%s\n", request);
-	printf("Line number: %d\n", line_num);
-	printf("\n\n\n");
-
-	get_lines(request, line_list);
-	for(i=0; i<line_num; i++)
-	{
-		printf("%s\t%d\n", line_list[i], (int)strlen(line_list[i]));
-		printf("-----------------------------------------------------------\n");
-	}
-	method = get_method(line_list[0]);
-	if( (method) < 0)
-	{
-		fprintf(stderr, "Unknown method\n");
-		/* TODO send unimplemented method response */
-		return 1;
-	}
-	err = get_uri(line_list[0], uri);
-	if(err)
-	{
-		fprintf(stderr, "Unknown method\n");
-		/* TODO send URI too long response */
-		return 1;
-	}
-	printf("\n\n%s\n", uri);
-	protocol = get_protocol(line_list[0]);
-	if(protocol < 0)
-	{
-		fprintf(stderr, "Unknown protocol\n");
-		/* TODO send URI too long response */
-		return 1;
-	}
-	printf("%s\t%d\n", protocols[protocol], strlen(protocols[protocol]));
-
-	printf("%d\n", calc_resp_header_size(0, 0, "text/html", 10));
-	resp_header_buffer = (char*) malloc(sizeof(char) 
-		* calc_resp_header_size(0, 0, "text/html", 10));
-	free(resp_header_buffer);
-	if(resp_header_buffer == NULL)
-	{
-		fprintf(stderr, "Error in malloc() in create_response_header() resp header buffer.\n");
-		return 1;
-	}
-	fd = create_response(method, uri, protocol);
-	close(fd);
+	fd = create_response(request);
+	//close(fd);
 	return 0;
 }
