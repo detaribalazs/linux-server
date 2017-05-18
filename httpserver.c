@@ -10,6 +10,8 @@
 #include <errno.h>
 #include <sys/sendfile.h>
 #include <ctype.h>
+#include <stdlib.h>
+
 
 #define MAX_LINE_LENGTH 	256
 #define MAX_METHOD_LENGTH 	7
@@ -24,13 +26,15 @@
 #define MAX_CON_NUM			3
 #define SERVER_NAME			"Server: dbalazs server v1.0\r\n"
 #define MAX_PARAMETER_LENGTH 1500
-#define PHP_COMPLETITION	"<?php \
-if (!isset($_SERVER[\"HTTP_HOST\"])) \
-	{ \
-  	parse_str($argv[1], $_GET); \
-  	parse_str($argv[1], $_POST); \
-	} \
-?>"
+#define FILE_NAME_LENGTH	50
+#define MAX_COMMAND_LENGTH	(2 * FILE_NAME_LENGTH + MAX_PARAMETER_LENGTH + 10)
+#define PHP_COMPLETITION	"<?php\n \
+if (!isset($_SERVER[\"HTTP_HOST\"]))\n \
+	{\n \
+  	parse_str($argv[1], $_GET);\n \
+  	parse_str($argv[1], $_POST);\n \
+	}\n \
+?>\n"
 
 /* free pointers : line list, file buffer, status_line, resp_header_buffer */
 
@@ -374,7 +378,7 @@ int create_response(const char *request)
 	int line_num;
 
 	char uri[MAX_URI_LENGTH];
-	char get_paramters[MAX_PARAMETER_LENGTH];
+	char get_parameters[MAX_PARAMETER_LENGTH];
 	char post_parameters[MAX_PARAMETER_LENGTH];
 
 	struct stat req_inode;
@@ -385,14 +389,20 @@ int create_response(const char *request)
 	char uri_buf[MAX_URI_LENGTH];
 	time_t mtime;
 	time_t curr_time;
-	char tmp_file_name[50];
+	char tmp_file_name[FILE_NAME_LENGTH];
 	int req_size, err, i;
 	int get_param_num;
 	int post_param_num;
 
 	int tmp_php_fd;
 	bool tmp_php_flag = false;
-	char tmp_php_file_name[50];
+	char tmp_php_file_name[FILE_NAME_LENGTH];
+
+	int tmp_html_fd;
+	bool tmp_html_flag = false;
+	char tmp_html_file_name[FILE_NAME_LENGTH];
+
+	char command[MAX_COMMAND_LENGTH];
 
 	/******************************* init line list *****************************/
 	line_num = get_line_num(request);
@@ -437,8 +447,8 @@ int create_response(const char *request)
 	printf("%d\n", get_param_num);
 	post_param_num = get_post_param_num(line_list[line_num-1]);
 	printf("%d\n", post_param_num);
-	get_get_parameters(line_list[0], get_paramters);
-	printf("%s\n", get_paramters);
+	get_get_parameters(line_list[0], get_parameters);
+	printf("%s\n", get_parameters);
 	get_post_parameters(line_list[line_num-1], post_parameters);
 	printf("%s\n", post_parameters);
 	free(line_list);
@@ -447,7 +457,7 @@ int create_response(const char *request)
 	while(!tmp_flag)
 	{
 		srand(time(NULL));
-		sprintf(tmp_file_name, "./tmp%d", (int)(rand()*MAX_CON_NUM));
+		sprintf(tmp_file_name, "./tmp%d.html", (int)(rand()*MAX_CON_NUM));
 		tmp_fd = open(tmp_file_name, O_RDONLY);
 		if(tmp_fd < 0)
 		{
@@ -505,6 +515,25 @@ int create_response(const char *request)
 						close(tmp_php_fd);
 					}
 				}
+				/* open temporal html for storing php generated */
+				while(!tmp_html_flag)
+				{
+					srand(time(NULL));
+					sprintf(tmp_html_file_name, "./tmp_html%d.html", (int)(rand()*MAX_CON_NUM));
+					tmp_html_fd = open(tmp_html_file_name, O_RDONLY);
+					if(tmp_html_fd < 0)
+					{
+						tmp_html_fd = open(tmp_html_file_name, O_CREAT|O_RDWR|O_TRUNC, 0600);
+						if(tmp_html_fd > 0)
+						{
+							tmp_html_flag = true;
+						}
+					}
+					else
+					{
+						close(tmp_html_fd);
+					}
+				} 
 
 				/* print completition */
 				dprintf(tmp_php_fd, "%s\n", PHP_COMPLETITION);
@@ -523,7 +552,13 @@ int create_response(const char *request)
 				}
 				lseek(req_fd, 0, SEEK_SET);
 				sendfile(tmp_php_fd, req_fd, NULL, req_size);
+				sprintf(command, "php %s \"%s\" > %s", tmp_php_file_name, get_parameters, tmp_html_file_name);
+				system(command);
+				req_size = lseek(tmp_html_fd, 0, SEEK_END);
+				lseek(tmp_html_fd, 0, SEEK_SET);
 
+				create_resp_header(status, protocol, "text/html", req_size, tmp_fd);
+				sendfile(tmp_fd, tmp_html_fd, NULL, req_size);
 			}
 
 			/* it's a html file */
@@ -597,7 +632,7 @@ int create_response(const char *request)
 int main(void)
 {
 	int fd;
-	const char request[] = "GET /index.php HTTP/1.1\r\n\
+	const char request[] = "GET /index.html HTTP/1.1\r\n\
 Host: localhost:1122\r\n\
 Connection: keep-alive\r\n\
 Upgrade-Insecure-Requests: 1\r\n\
@@ -619,7 +654,7 @@ Accept-Language: hu,en-US;q=0.8,en;q=0.6,de;q=0.4\r\n\
 \r\n\
 bookId=12345&author=Karl+Marx&title=My+Book";
 
-	fd = create_response(request2);
+	fd = create_response(request);
 	close(fd);
 	return 0;
 }
