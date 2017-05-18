@@ -1,10 +1,3 @@
-/* tcpszerver.c
- * 
- * Egyszerű TCP szerver példa. Képes egy kapcsolat fogadására és
- * kiírja a képernyőre a kapott adatokat.
- * 
- */
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>

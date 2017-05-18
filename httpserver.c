@@ -12,7 +12,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 
-#define DEBUG
+//#define DEBUG
 
 #define MAX_LINE_LENGTH 	256
 #define MAX_METHOD_LENGTH 	7
@@ -571,6 +571,13 @@ int create_response(const char *request)
 
 				create_resp_header(status, protocol, "text/html", req_size, tmp_fd);
 				sendfile(tmp_fd, tmp_html_fd, NULL, req_size);
+				close(tmp_html_fd);
+				close(tmp_php_fd);
+				#ifndef DEBUG
+				remove(tmp_html_file_name);
+				remove(tmp_php_file_name);
+				#endif
+				return tmp_fd;
 			}
 
 			/* it's a html file */
@@ -592,8 +599,6 @@ int create_response(const char *request)
 				lseek(req_fd, 0, SEEK_SET);
 				
 				create_resp_header(status, protocol, "text/html", req_size, tmp_fd);
-				//sendfile(tmp_fd, req_fd, NULL, req_size);
-				//printf("%s\n", strerror(errno));
 				return tmp_fd;
 			}
 		break;
@@ -675,6 +680,13 @@ int create_response(const char *request)
 
 				create_resp_header(status, protocol, "text/html", req_size, tmp_fd);
 				sendfile(tmp_fd, tmp_html_fd, NULL, req_size);
+				close(tmp_html_fd);
+				close(tmp_php_fd);
+				#ifndef DEBUG
+				remove(tmp_html_file_name);
+				remove(tmp_php_file_name);
+				#endif
+				return tmp_fd;
 			}
 
 			/* it's a html file */
